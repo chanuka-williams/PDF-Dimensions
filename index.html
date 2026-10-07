@@ -35,7 +35,23 @@
       color: var(--ink);
       font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
     }
-    main { max-width: 860px; margin: 0 auto; padding: 2.5rem 1rem 4rem; }
+    main { max-width: 1120px; margin: 0 auto; padding: 2.5rem 1rem 4rem; }
+    .layout { display: grid; grid-template-columns: minmax(0, 1fr) 270px; gap: 0 1.25rem; align-items: start; }
+    .layout > .col { min-width: 0; }
+    #summary {
+      position: sticky; top: 1rem; margin-top: 1rem;
+      background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+      overflow: hidden;
+    }
+    #summary[hidden] { display: none; }
+    #summary h2 { font-size: 1rem; margin: 0; padding: .75rem 1rem; border-bottom: 1px solid var(--line); }
+    #summary table { font-size: .9rem; }
+    #summary th:last-child, #summary td:last-child { text-align: right; }
+    #summary tfoot td { font-weight: 600; background: var(--accent-soft); border-bottom: 0; }
+    @media (max-width: 820px) {
+      .layout { grid-template-columns: minmax(0, 1fr); }
+      #summary { position: static; order: -1; }
+    }
     h1 { font-size: 1.9rem; margin: 0 0 .25rem; letter-spacing: -.01em; }
     .lede { color: var(--muted); margin: 0 0 1.5rem; max-width: 60ch; }
 
@@ -168,18 +184,31 @@
     </div>
   </div>
 
-  <div id="results"></div>
+  <div class="layout">
+    <div class="col">
+      <div id="results"></div>
 
-  <div id="grand" hidden>
-    <p class="sub" id="grandSub"></p>
-    <div class="pair">
-      <span class="label">Total area, all files</span>
-      <span class="value" id="grandArea"></span>
+      <div id="grand" hidden>
+        <p class="sub" id="grandSub"></p>
+        <div class="pair">
+          <span class="label">Total area, all files</span>
+          <span class="value" id="grandArea"></span>
+        </div>
+        <div class="pair">
+          <span class="label">Total cost</span>
+          <span class="value" id="grandCost"></span>
+        </div>
+      </div>
     </div>
-    <div class="pair">
-      <span class="label">Total cost</span>
-      <span class="value" id="grandCost"></span>
-    </div>
+
+    <aside id="summary" hidden aria-label="Size summary">
+      <h2>Pages by size</h2>
+      <table>
+        <thead><tr><th scope="col">Size (mm)</th><th scope="col">Qty</th></tr></thead>
+        <tbody id="summaryBody"></tbody>
+        <tfoot><tr><td>Total</td><td id="summaryTotal"></td></tr></tfoot>
+      </table>
+    </aside>
   </div>
 
   <footer>Sizes come from each page's CropBox (or MediaBox). Rotated pages are shown as displayed, and areas are calculated from the page size in millimetres.</footer>
@@ -299,13 +328,27 @@
     results.replaceChildren();
     const rate = getRate();
     let area = 0, pages = 0, ok = 0, failed = 0;
+    const sizeCounts = new Map();   // "210 × 297" -> page count, across all files
 
     files.forEach(f => {
       if (f.error) { renderError(f); failed++; return; }
       area += renderFile(f, rate);
       pages += f.total;
       ok++;
+      f.groups.forEach(g => {
+        const m = measure(g);
+        const key = `${Math.round(m.mmW)} × ${Math.round(m.mmH)}`;
+        sizeCounts.set(key, (sizeCounts.get(key) || 0) + m.count);
+      });
     });
+
+    const summaryBody = $("summaryBody");
+    summaryBody.replaceChildren();
+    [...sizeCounts].sort((a, b) => b[1] - a[1]).forEach(([size, qty]) => {
+      summaryBody.append(el("tr", {}, td(size, "num"), td(String(qty), "num")));
+    });
+    $("summaryTotal").textContent = String(pages);
+    $("summary").hidden = ok === 0;
 
     bar.hidden = files.length === 0;
     let text = `${ok} file${ok === 1 ? "" : "s"}, ${pages} page${pages === 1 ? "" : "s"}`;
