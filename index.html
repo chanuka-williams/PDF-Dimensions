@@ -294,7 +294,7 @@
       tr.append(
         td(label),
         el("td", {}, shape),
-        td(`${m.mmW.toFixed(0)} × ${m.mmH.toFixed(0)}`, "num"),
+        td(`${m.mmW.toFixed(0)} x ${m.mmH.toFixed(0)}`, "num"),
         td(m.areaEach.toFixed(4), "num"),
         td(m.areaGroup.toFixed(4), "num"),
         td(rate === null ? "—" : money.format(m.areaGroup * rate), "num")
@@ -328,7 +328,7 @@
     results.replaceChildren();
     const rate = getRate();
     let area = 0, pages = 0, ok = 0, failed = 0;
-    const sizeCounts = new Map();   // "210 × 297" -> { qty, area }, across all files
+    const sizeCounts = new Map();   // "210 x 297" -> { qty, area }, across all files
 
     files.forEach(f => {
       if (f.error) { renderError(f); failed++; return; }
@@ -337,7 +337,7 @@
       ok++;
       f.groups.forEach(g => {
         const m = measure(g);
-        const key = `${Math.round(m.mmW)} × ${Math.round(m.mmH)}`;
+        const key = `${Math.round(m.mmW)} x ${Math.round(m.mmH)}`;
         const s = sizeCounts.get(key) || { qty: 0, area: 0 };
         s.qty += m.count;
         s.area += m.areaGroup;
