@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PDF Dimensions</title>
+  <style>
+    :root {
+      --paper: #f5f7fa;
+      --card: #ffffff;
+      --ink: #14213d;
+      --muted: #5b6678;
+      --line: #d8dee8;
+      --accent: #1d4ed8;
+      --accent-soft: #e6edff;
+      --warn: #b42318;
+      --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --paper: #0f1626;
+        --card: #172036;
+        --ink: #e8ecf5;
+        --muted: #97a3ba;
+        --line: #2a3654;
+        --accent: #7ba2ff;
+        --accent-soft: #1d2b52;
+        --warn: #ff8a80;
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--paper);
+      color: var(--ink);
+      font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+    }
+    main { max-width: 860px; margin: 0 auto; padding: 2.5rem 1rem 4rem; }
+    h1 { font-size: 1.9rem; margin: 0 0 .25rem; letter-spacing: -.01em; }
+    .lede { color: var(--muted); margin: 0 0 1.5rem; max-width: 60ch; }
+
+    #drop {
+      border: 2px dashed var(--line);
+      border-radius: 10px;
+      background: var(--card);
+      padding: 2rem 1rem;
+      text-align: center;
+      transition: border-color .15s, background .15s;
+    }
+    #drop.over { border-color: var(--accent); background: var(--accent-soft); }
+    #drop p { margin: 0 0 .75rem; }
+    .btn {
+      font: inherit;
+      border: 1px solid var(--line);
+      background: var(--card);
+      color: var(--ink);
+      padding: .45rem .9rem;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+    .btn:hover { border-color: var(--accent); }
+    .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+    @media (prefers-color-scheme: dark) { .btn.primary { color: #0f1626; } }
+    .btn:focus-visible, input:focus-visible + label.btn { outline: 3px solid var(--accent); outline-offset: 2px; }
+    input[type=file] { position: absolute; width: 1px; height: 1px; opacity: 0; overflow: hidden; }
+
+    #bar {
+      display: flex; flex-wrap: wrap; gap: .5rem; align-items: center;
+      justify-content: space-between;
+      margin: 1.5rem 0 .5rem;
+    }
+    #bar[hidden] { display: none; }
+    #status { color: var(--muted); margin: 0; }
+    .actions { display: flex; gap: .5rem; }
+
+    .file {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      margin-top: 1rem;
+      overflow: hidden;
+    }
+    .file header {
+      display: flex; flex-wrap: wrap; gap: .25rem .75rem;
+      justify-content: space-between; align-items: baseline;
+      padding: .75rem 1rem;
+      border-bottom: 1px solid var(--line);
+    }
+    .file h2 { font-size: 1rem; margin: 0; word-break: break-all; }
+    .file .meta { color: var(--muted); font-size: .875rem; }
+    .file.error { border-color: var(--warn); }
+    .file.error .msg { padding: .75rem 1rem; color: var(--warn); margin: 0; }
+
+    .scroll { overflow-x: auto; }
+    table { border-collapse: collapse; width: 100%; font-size: .9rem; }
+    th, td { padding: .5rem 1rem; text-align: left; border-bottom: 1px solid var(--line); white-space: nowrap; }
+    tr:last-child td { border-bottom: 0; }
+    th { color: var(--muted); font-weight: 600; font-size: .8rem; }
+    td.num { font-family: var(--mono); font-size: .85rem; }
+    .shape {
+      display: inline-block; vertical-align: middle;
+      border: 1.5px solid var(--accent); background: var(--accent-soft);
+      border-radius: 2px;
+    }
+    .tag {
+      display: inline-block; padding: 0 .45rem; border-radius: 999px;
+      background: var(--accent-soft); color: var(--accent); font-size: .8rem;
+    }
+    footer { margin-top: 2.5rem; color: var(--muted); font-size: .875rem; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>PDF Dimensions</h1>
+  <p class="lede">Add one or more PDFs to see the size of every page. Files are read in your browser and are never uploaded.</p>
+
+  <div id="drop">
+    <p>Drop PDFs here, or</p>
+    <input type="file" id="file" accept="application/pdf,.pdf" multiple>
+    <label for="file" class="btn primary">Choose PDFs</label>
+  </div>
+
+  <div id="bar" hidden>
+    <p id="status" role="status"></p>
+    <div class="actions">
+      <button class="btn" id="csv" type="button">Download CSV</button>
+      <button class="btn" id="clear" type="button">Clear all</button>
+    </div>
+  </div>
+
+  <div id="results"></div>
+
+  <footer>Sizes come from each page's CropBox (or MediaBox) in PDF points, where 72 points = 1 inch. Rotated pages are shown as displayed.</footer>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+<script>
+  const { PDFDocument } = PDFLib;
+
+  const $ = id => document.getElementById(id);
+  const results = $("results"), bar = $("bar"), status = $("status"), drop = $("drop");
+  const rows = [];       // for CSV
+  let fileCount = 0, pageCount = 0, failCount = 0;
+
+  const PAPER = [
+    ["A0", 841, 1189], ["A1", 594, 841], ["A2", 420, 594], ["A3", 297, 420],
+    ["A4", 210, 297], ["A5", 148, 210], ["A6", 105, 148],
+    ["B4", 250, 353], ["B5", 176, 250],
+    ["Letter", 215.9, 279.4], ["Legal", 215.9, 355.6], ["Tabloid", 279.4, 431.8],
+    ["Executive", 184.15, 266.7]
+  ];
+
+  function paperName(wPt, hPt) {
+    const w = wPt / 72 * 25.4, h = hPt / 72 * 25.4;
+    const [short, long] = w <= h ? [w, h] : [h, w];
+    for (const [name, a, b] of PAPER) {
+      if (Math.abs(short - a) <= 2 && Math.abs(long - b) <= 2) {
+        return name + (w <= h ? "" : " landscape");
+      }
+    }
+    return "";
+  }
+
+  function pageInfo(page) {
+    let { width, height } = page.getSize();
+    const rot = page.getRotation().angle % 360;
+    if (rot === 90 || rot === 270) [width, height] = [height, width];
+    return { width, height, rot };
+  }
+
+  // Merge consecutive pages that share size and rotation into ranges.
+  function toGroups(infos) {
+    const groups = [];
+    infos.forEach((p, i) => {
+      const last = groups[groups.length - 1];
+      const same = last &&
+        Math.abs(last.width - p.width) < 0.5 &&
+        Math.abs(last.height - p.height) < 0.5 &&
+        last.rot === p.rot;
+      if (same) last.end = i + 1;
+      else groups.push({ ...p, start: i + 1, end: i + 1 });
+    });
+    return groups;
+  }
+
+  function el(tag, props = {}, ...kids) {
+    const node = document.createElement(tag);
+    Object.assign(node, props);
+    kids.forEach(k => node.append(k));
+    return node;
+  }
+
+  function td(text, cls) {
+    return el("td", { textContent: text, className: cls || "" });
+  }
+
+  function renderFile(name, groups, total) {
+    const table = el("table");
+    const head = el("thead", {}, el("tr", {},
+      ...["Pages", "Shape", "Points", "Inches", "mm", "Size", "Rotation"]
+        .map(t => el("th", { textContent: t, scope: "col" }))));
+    const body = el("tbody");
+
+    groups.forEach(g => {
+      const label = g.start === g.end ? String(g.start) : `${g.start}–${g.end}`;
+      const inW = g.width / 72, inH = g.height / 72;
+      const mmW = inW * 25.4, mmH = inH * 25.4;
+      const paper = paperName(g.width, g.height);
+
+      const scale = 22 / Math.max(g.width, g.height);
+      const shape = el("span", { className: "shape" });
+      shape.style.width = Math.max(4, g.width * scale) + "px";
+      shape.style.height = Math.max(4, g.height * scale) + "px";
+
+      const tr = el("tr");
+      tr.append(
+        td(label),
+        el("td", {}, shape),
+        td(`${g.width.toFixed(1)} × ${g.height.toFixed(1)}`, "num"),
+        td(`${inW.toFixed(2)} × ${inH.toFixed(2)}`, "num"),
+        td(`${mmW.toFixed(0)} × ${mmH.toFixed(0)}`, "num"),
+        el("td", {}, paper ? el("span", { className: "tag", textContent: paper }) : "—"),
+        td(g.rot + "°", "num")
+      );
+      body.append(tr);
+
+      rows.push([name, label, g.width.toFixed(2), g.height.toFixed(2),
+        inW.toFixed(3), inH.toFixed(3), mmW.toFixed(1), mmH.toFixed(1), paper, g.rot]);
+    });
+
+    table.append(head, body);
+    const sizes = groups.length === 1 ? "all pages the same size" : `${groups.length} size groups`;
+    const card = el("section", { className: "file" },
+      el("header", {},
+        el("h2", { textContent: name }),
+        el("span", { className: "meta", textContent: `${total} page${total === 1 ? "" : "s"}, ${sizes}` })),
+      el("div", { className: "scroll" }, table));
+    results.append(card);
+  }
+
+  function renderError(name, message) {
+    results.append(el("section", { className: "file error" },
+      el("header", {}, el("h2", { textContent: name })),
+      el("p", { className: "msg", textContent: message })));
+  }
+
+  function updateStatus() {
+    bar.hidden = fileCount + failCount === 0;
+    let text = `${fileCount} file${fileCount === 1 ? "" : "s"}, ${pageCount} page${pageCount === 1 ? "" : "s"}`;
+    if (failCount) text += `, ${failCount} could not be read`;
+    status.textContent = text;
+  }
+
+  async function handleFile(file) {
+    try {
+      const bytes = await file.arrayBuffer();
+      const pdf = await PDFDocument.load(bytes, { ignoreEncryption: true });
+      const infos = pdf.getPages().map(pageInfo);
+      renderFile(file.name, toGroups(infos), infos.length);
+      fileCount++;
+      pageCount += infos.length;
+    } catch (err) {
+      renderError(file.name, "Could not read this file. It may be damaged or password protected. (" + err.message + ")");
+      failCount++;
+    }
+  }
+
+  async function handleFiles(list) {
+    const files = [...list].filter(f => f.type === "application/pdf" || /\.pdf$/i.test(f.name));
+    if (!files.length) {
+      status.textContent = "No PDF files found. Choose files ending in .pdf.";
+      bar.hidden = false;
+      return;
+    }
+    status.textContent = `Reading ${files.length} file${files.length === 1 ? "" : "s"}…`;
+    bar.hidden = false;
+    for (const f of files) await handleFile(f);   // sequential keeps memory use low
+    updateStatus();
+  }
+
+  function csvCell(v) {
+    const s = String(v);
+    return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  }
+
+  $("csv").addEventListener("click", () => {
+    const header = ["file", "pages", "width_pt", "height_pt", "width_in", "height_in", "width_mm", "height_mm", "paper_size", "rotation"];
+    const csv = [header, ...rows].map(r => r.map(csvCell).join(",")).join("\n");
+    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+    const a = el("a", { href: url, download: "pdf-dimensions.csv" });
+    document.body.append(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  });
+
+  $("clear").addEventListener("click", () => {
+    results.replaceChildren();
+    rows.length = 0;
+    fileCount = pageCount = failCount = 0;
+    $("file").value = "";
+    bar.hidden = true;
+  });
+
+  $("file").addEventListener("change", e => { handleFiles(e.target.files); e.target.value = ""; });
+  drop.addEventListener("dragover", e => { e.preventDefault(); drop.classList.add("over"); });
+  drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+  drop.addEventListener("drop", e => {
+    e.preventDefault();
+    drop.classList.remove("over");
+    handleFiles(e.dataTransfer.files);
+  });
+</script>
+</body>
+</html>
