@@ -64,6 +64,22 @@
     .btn:focus-visible, input:focus-visible + label.btn { outline: 3px solid var(--accent); outline-offset: 2px; }
     input[type=file] { position: absolute; width: 1px; height: 1px; opacity: 0; overflow: hidden; }
 
+    .rate {
+      margin-top: 1rem; padding: 1rem 1.25rem;
+      background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+      display: flex; flex-wrap: wrap; gap: .5rem 1rem; align-items: center;
+    }
+    .rate label { font-weight: 600; }
+    .rate .field { display: flex; align-items: center; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+    .rate .field:focus-within { outline: 3px solid var(--accent); outline-offset: 1px; }
+    .rate .cur { padding: .45rem .6rem; background: var(--accent-soft); color: var(--accent); font-family: var(--mono); }
+    .rate input {
+      font: inherit; font-family: var(--mono);
+      border: 0; outline: 0; padding: .45rem .6rem; width: 9rem;
+      background: var(--card); color: var(--ink);
+    }
+    .rate .hint { color: var(--muted); font-size: .875rem; }
+
     #bar {
       display: flex; flex-wrap: wrap; gap: .5rem; align-items: center;
       justify-content: space-between;
@@ -102,39 +118,46 @@
       border: 1.5px solid var(--accent); background: var(--accent-soft);
       border-radius: 2px;
     }
-    .tag {
-      display: inline-block; padding: 0 .45rem; border-radius: 999px;
-      background: var(--accent-soft); color: var(--accent); font-size: .8rem;
-    }
     .file .subtotal {
-      display: flex; justify-content: space-between; gap: 1rem;
+      display: flex; flex-wrap: wrap; justify-content: space-between; gap: .25rem 1rem;
       padding: .6rem 1rem; border-top: 1px solid var(--line);
       background: var(--accent-soft); font-size: .9rem;
     }
     .file .subtotal strong { font-family: var(--mono); }
+
     #grand {
       margin-top: 1.5rem; padding: 1.25rem 1.5rem;
       border: 2px solid var(--accent); border-radius: 10px;
       background: var(--card);
-      display: flex; flex-wrap: wrap; gap: .5rem 1.5rem;
-      justify-content: space-between; align-items: baseline;
     }
     #grand[hidden] { display: none; }
+    #grand .sub { color: var(--muted); font-size: .875rem; margin: 0 0 .75rem; }
+    #grand .pair { display: flex; flex-wrap: wrap; gap: .5rem 1.5rem; justify-content: space-between; align-items: baseline; }
+    #grand .pair + .pair { margin-top: .5rem; padding-top: .5rem; border-top: 1px solid var(--line); }
     #grand .label { font-weight: 600; }
-    #grand .sub { color: var(--muted); font-size: .875rem; display: block; font-weight: 400; }
     #grand .value { font-family: var(--mono); font-size: 1.75rem; font-weight: 700; color: var(--accent); }
+    #grand .value.empty { font-size: 1rem; font-weight: 400; color: var(--muted); }
     footer { margin-top: 2.5rem; color: var(--muted); font-size: .875rem; }
   </style>
 </head>
 <body>
 <main>
   <h1>PDF Dimensions</h1>
-  <p class="lede">Add one or more PDFs to see the size of every page. Files are read in your browser and are never uploaded.</p>
+  <p class="lede">Add one or more PDFs to see the size and area of every page, and work out what they cost. Files are read in your browser and are never uploaded.</p>
 
   <div id="drop">
     <p>Drop PDFs here, or</p>
     <input type="file" id="file" accept="application/pdf,.pdf" multiple>
     <label for="file" class="btn primary">Choose PDFs</label>
+  </div>
+
+  <div class="rate">
+    <label for="rate">Cost per m²</label>
+    <span class="field">
+      <span class="cur" aria-hidden="true">£</span>
+      <input type="number" id="rate" min="0" step="any" inputmode="decimal" placeholder="0.00">
+    </span>
+    <span class="hint">Costs update as you type.</span>
   </div>
 
   <div id="bar" hidden>
@@ -148,10 +171,15 @@
   <div id="results"></div>
 
   <div id="grand" hidden>
-    <span class="label">Total area, all files
-      <span class="sub" id="grandSub"></span>
-    </span>
-    <span class="value" id="grandValue"></span>
+    <p class="sub" id="grandSub"></p>
+    <div class="pair">
+      <span class="label">Total area, all files</span>
+      <span class="value" id="grandArea"></span>
+    </div>
+    <div class="pair">
+      <span class="label">Total cost</span>
+      <span class="value" id="grandCost"></span>
+    </div>
   </div>
 
   <footer>Sizes come from each page's CropBox (or MediaBox). Rotated pages are shown as displayed, and areas are calculated from the page size in millimetres.</footer>
@@ -163,26 +191,15 @@
 
   const $ = id => document.getElementById(id);
   const results = $("results"), bar = $("bar"), status = $("status"), drop = $("drop");
-  const rows = [];       // for CSV
-  let fileCount = 0, pageCount = 0, failCount = 0, grandArea = 0;
 
-  const PAPER = [
-    ["A0", 841, 1189], ["A1", 594, 841], ["A2", 420, 594], ["A3", 297, 420],
-    ["A4", 210, 297], ["A5", 148, 210], ["A6", 105, 148],
-    ["B4", 250, 353], ["B5", 176, 250],
-    ["Letter", 215.9, 279.4], ["Legal", 215.9, 355.6], ["Tabloid", 279.4, 431.8],
-    ["Executive", 184.15, 266.7]
-  ];
+  // All loaded files live here; the page is redrawn from this whenever something changes.
+  const files = [];   // { name, groups, total } or { name, error }
 
-  function paperName(wPt, hPt) {
-    const w = wPt / 72 * 25.4, h = hPt / 72 * 25.4;
-    const [short, long] = w <= h ? [w, h] : [h, w];
-    for (const [name, a, b] of PAPER) {
-      if (Math.abs(short - a) <= 2 && Math.abs(long - b) <= 2) {
-        return name + (w <= h ? "" : " landscape");
-      }
-    }
-    return "";
+  const money = new Intl.NumberFormat("en-GB", { style: "currency", currency: "GBP" });
+
+  function getRate() {
+    const v = parseFloat($("rate").value);
+    return Number.isFinite(v) && v >= 0 ? v : null;
   }
 
   function pageInfo(page) {
@@ -207,6 +224,14 @@
     return groups;
   }
 
+  // Derived numbers for one group of pages.
+  function measure(g) {
+    const mmW = g.width / 72 * 25.4, mmH = g.height / 72 * 25.4;
+    const count = g.end - g.start + 1;
+    const areaEach = (mmW / 1000) * (mmH / 1000);   // m² for one page
+    return { mmW, mmH, count, areaEach, areaGroup: areaEach * count };
+  }
+
   function el(tag, props = {}, ...kids) {
     const node = document.createElement(tag);
     Object.assign(node, props);
@@ -218,68 +243,86 @@
     return el("td", { textContent: text, className: cls || "" });
   }
 
-  function renderFile(name, groups, total) {
+  function renderFile(f, rate) {
+    const headers = ["Pages", "Shape", "mm", "m² per page", "m² total", "Cost"];
     const table = el("table");
     const head = el("thead", {}, el("tr", {},
-      ...["Pages", "mm", "m² per page", "m² total"]
-        .map(t => el("th", { textContent: t, scope: "col" }))));
+      ...headers.map(t => el("th", { textContent: t, scope: "col" }))));
     const body = el("tbody");
     let fileArea = 0;
 
-    groups.forEach(g => {
+    f.groups.forEach(g => {
+      const m = measure(g);
       const label = g.start === g.end ? String(g.start) : `${g.start}–${g.end}`;
-      const inW = g.width / 72, inH = g.height / 72;
-      const mmW = inW * 25.4, mmH = inH * 25.4;
-      const paper = paperName(g.width, g.height);
-      const count = g.end - g.start + 1;
-      const areaEach = (mmW / 1000) * (mmH / 1000);   // m² for one page
-      const areaGroup = areaEach * count;
-      fileArea += areaGroup;
+      fileArea += m.areaGroup;
+
+      const scale = 22 / Math.max(g.width, g.height);
+      const shape = el("span", { className: "shape" });
+      shape.style.width = Math.max(4, g.width * scale) + "px";
+      shape.style.height = Math.max(4, g.height * scale) + "px";
 
       const tr = el("tr");
       tr.append(
         td(label),
-        td(`${mmW.toFixed(0)} × ${mmH.toFixed(0)}`, "num"),
-        td(areaEach.toFixed(4), "num"),
-        td(areaGroup.toFixed(4), "num")
+        el("td", {}, shape),
+        td(`${m.mmW.toFixed(0)} × ${m.mmH.toFixed(0)}`, "num"),
+        td(m.areaEach.toFixed(4), "num"),
+        td(m.areaGroup.toFixed(4), "num"),
+        td(rate === null ? "—" : money.format(m.areaGroup * rate), "num")
       );
       body.append(tr);
-
-      rows.push([name, label, count, g.width.toFixed(2), g.height.toFixed(2),
-        inW.toFixed(3), inH.toFixed(3), mmW.toFixed(1), mmH.toFixed(1), paper, g.rot,
-        areaEach.toFixed(6), areaGroup.toFixed(6)]);
     });
 
     table.append(head, body);
-    const sizes = groups.length === 1 ? "all pages the same size" : `${groups.length} size groups`;
-    const card = el("section", { className: "file" },
+    const sizes = f.groups.length === 1 ? "all pages the same size" : `${f.groups.length} size groups`;
+    const subtotal = el("div", { className: "subtotal" },
+      el("span", { textContent: "File total" }),
+      el("strong", { textContent: fileArea.toFixed(4) + " m²" }),
+      el("strong", { textContent: rate === null ? "—" : money.format(fileArea * rate) }));
+
+    results.append(el("section", { className: "file" },
       el("header", {},
-        el("h2", { textContent: name }),
-        el("span", { className: "meta", textContent: `${total} page${total === 1 ? "" : "s"}, ${sizes}` })),
+        el("h2", { textContent: f.name }),
+        el("span", { className: "meta", textContent: `${f.total} page${f.total === 1 ? "" : "s"}, ${sizes}` })),
       el("div", { className: "scroll" }, table),
-      el("div", { className: "subtotal" },
-        el("span", { textContent: "File total" }),
-        el("strong", { textContent: fileArea.toFixed(4) + " m²" })));
-    results.append(card);
+      subtotal));
     return fileArea;
   }
 
-  function renderError(name, message) {
+  function renderError(f) {
     results.append(el("section", { className: "file error" },
-      el("header", {}, el("h2", { textContent: name })),
-      el("p", { className: "msg", textContent: message })));
+      el("header", {}, el("h2", { textContent: f.name })),
+      el("p", { className: "msg", textContent: f.error })));
   }
 
-  function updateStatus() {
-    bar.hidden = fileCount + failCount === 0;
-    let text = `${fileCount} file${fileCount === 1 ? "" : "s"}, ${pageCount} page${pageCount === 1 ? "" : "s"}`;
-    if (failCount) text += `, ${failCount} could not be read`;
+  function renderAll() {
+    results.replaceChildren();
+    const rate = getRate();
+    let area = 0, pages = 0, ok = 0, failed = 0;
+
+    files.forEach(f => {
+      if (f.error) { renderError(f); failed++; return; }
+      area += renderFile(f, rate);
+      pages += f.total;
+      ok++;
+    });
+
+    bar.hidden = files.length === 0;
+    let text = `${ok} file${ok === 1 ? "" : "s"}, ${pages} page${pages === 1 ? "" : "s"}`;
+    if (failed) text += `, ${failed} could not be read`;
     status.textContent = text;
 
-    const grand = $("grand");
-    grand.hidden = fileCount === 0;
-    $("grandValue").textContent = grandArea.toFixed(4) + " m²";
-    $("grandSub").textContent = `${pageCount} page${pageCount === 1 ? "" : "s"} across ${fileCount} file${fileCount === 1 ? "" : "s"}`;
+    $("grand").hidden = ok === 0;
+    $("grandSub").textContent = `${pages} page${pages === 1 ? "" : "s"} across ${ok} file${ok === 1 ? "" : "s"}`;
+    $("grandArea").textContent = area.toFixed(4) + " m²";
+    const costEl = $("grandCost");
+    if (rate === null) {
+      costEl.textContent = "Enter a cost per m² above";
+      costEl.className = "value empty";
+    } else {
+      costEl.textContent = money.format(area * rate);
+      costEl.className = "value";
+    }
   }
 
   async function handleFile(file) {
@@ -287,26 +330,23 @@
       const bytes = await file.arrayBuffer();
       const pdf = await PDFDocument.load(bytes, { ignoreEncryption: true });
       const infos = pdf.getPages().map(pageInfo);
-      grandArea += renderFile(file.name, toGroups(infos), infos.length);
-      fileCount++;
-      pageCount += infos.length;
+      files.push({ name: file.name, groups: toGroups(infos), total: infos.length });
     } catch (err) {
-      renderError(file.name, "Could not read this file. It may be damaged or password protected. (" + err.message + ")");
-      failCount++;
+      files.push({ name: file.name, error: "Could not read this file. It may be damaged or password protected. (" + err.message + ")" });
     }
   }
 
   async function handleFiles(list) {
-    const files = [...list].filter(f => f.type === "application/pdf" || /\.pdf$/i.test(f.name));
-    if (!files.length) {
+    const picked = [...list].filter(f => f.type === "application/pdf" || /\.pdf$/i.test(f.name));
+    if (!picked.length) {
       status.textContent = "No PDF files found. Choose files ending in .pdf.";
       bar.hidden = false;
       return;
     }
-    status.textContent = `Reading ${files.length} file${files.length === 1 ? "" : "s"}…`;
+    status.textContent = `Reading ${picked.length} file${picked.length === 1 ? "" : "s"}…`;
     bar.hidden = false;
-    for (const f of files) await handleFile(f);   // sequential keeps memory use low
-    updateStatus();
+    for (const f of picked) await handleFile(f);   // sequential keeps memory use low
+    renderAll();
   }
 
   function csvCell(v) {
@@ -315,9 +355,27 @@
   }
 
   $("csv").addEventListener("click", () => {
-    const header = ["file", "pages", "page_count", "width_pt", "height_pt", "width_in", "height_in", "width_mm", "height_mm", "paper_size", "rotation", "m2_per_page", "m2_total"];
-    const totalRow = ["TOTAL", "", pageCount, "", "", "", "", "", "", "", "", "", grandArea.toFixed(6)];
-    const csv = [header, ...rows, totalRow].map(r => r.map(csvCell).join(",")).join("\n");
+    const rate = getRate();
+    const header = ["file", "pages", "page_count", "width_mm", "height_mm", "m2_per_page", "m2_total", "cost_per_m2", "cost"];
+    const rows = [];
+    let area = 0, pages = 0;
+
+    files.forEach(f => {
+      if (f.error) return;
+      f.groups.forEach(g => {
+        const m = measure(g);
+        const label = g.start === g.end ? String(g.start) : `${g.start}-${g.end}`;
+        area += m.areaGroup;
+        pages += m.count;
+        rows.push([f.name, label, m.count, m.mmW.toFixed(1), m.mmH.toFixed(1),
+          m.areaEach.toFixed(6), m.areaGroup.toFixed(6),
+          rate === null ? "" : rate, rate === null ? "" : (m.areaGroup * rate).toFixed(2)]);
+      });
+    });
+    rows.push(["TOTAL", "", pages, "", "", "", area.toFixed(6),
+      rate === null ? "" : rate, rate === null ? "" : (area * rate).toFixed(2)]);
+
+    const csv = [header, ...rows].map(r => r.map(csvCell).join(",")).join("\n");
     const url = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
     const a = el("a", { href: url, download: "pdf-dimensions.csv" });
     document.body.append(a); a.click(); a.remove();
@@ -325,14 +383,12 @@
   });
 
   $("clear").addEventListener("click", () => {
-    results.replaceChildren();
-    rows.length = 0;
-    fileCount = pageCount = failCount = grandArea = 0;
+    files.length = 0;
     $("file").value = "";
-    bar.hidden = true;
-    $("grand").hidden = true;
+    renderAll();
   });
 
+  $("rate").addEventListener("input", renderAll);
   $("file").addEventListener("change", e => { handleFiles(e.target.files); e.target.value = ""; });
   drop.addEventListener("dragover", e => { e.preventDefault(); drop.classList.add("over"); });
   drop.addEventListener("dragleave", () => drop.classList.remove("over"));
