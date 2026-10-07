@@ -154,7 +154,7 @@
     <span class="value" id="grandValue"></span>
   </div>
 
-  <footer>Sizes come from each page's CropBox (or MediaBox) in PDF points, where 72 points = 1 inch. Rotated pages are shown as displayed.</footer>
+  <footer>Sizes come from each page's CropBox (or MediaBox). Rotated pages are shown as displayed, and areas are calculated from the page size in millimetres.</footer>
 </main>
 
 <script src="https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
@@ -221,7 +221,7 @@
   function renderFile(name, groups, total) {
     const table = el("table");
     const head = el("thead", {}, el("tr", {},
-      ...["Pages", "Shape", "Points", "Inches", "mm", "Size", "Rotation", "m² per page", "m² total"]
+      ...["Pages", "mm", "m² per page", "m² total"]
         .map(t => el("th", { textContent: t, scope: "col" }))));
     const body = el("tbody");
     let fileArea = 0;
@@ -236,20 +236,10 @@
       const areaGroup = areaEach * count;
       fileArea += areaGroup;
 
-      const scale = 22 / Math.max(g.width, g.height);
-      const shape = el("span", { className: "shape" });
-      shape.style.width = Math.max(4, g.width * scale) + "px";
-      shape.style.height = Math.max(4, g.height * scale) + "px";
-
       const tr = el("tr");
       tr.append(
         td(label),
-        el("td", {}, shape),
-        td(`${g.width.toFixed(1)} × ${g.height.toFixed(1)}`, "num"),
-        td(`${inW.toFixed(2)} × ${inH.toFixed(2)}`, "num"),
         td(`${mmW.toFixed(0)} × ${mmH.toFixed(0)}`, "num"),
-        el("td", {}, paper ? el("span", { className: "tag", textContent: paper }) : "—"),
-        td(g.rot + "°", "num"),
         td(areaEach.toFixed(4), "num"),
         td(areaGroup.toFixed(4), "num")
       );
