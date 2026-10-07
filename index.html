@@ -106,6 +106,23 @@
       display: inline-block; padding: 0 .45rem; border-radius: 999px;
       background: var(--accent-soft); color: var(--accent); font-size: .8rem;
     }
+    .file .subtotal {
+      display: flex; justify-content: space-between; gap: 1rem;
+      padding: .6rem 1rem; border-top: 1px solid var(--line);
+      background: var(--accent-soft); font-size: .9rem;
+    }
+    .file .subtotal strong { font-family: var(--mono); }
+    #grand {
+      margin-top: 1.5rem; padding: 1.25rem 1.5rem;
+      border: 2px solid var(--accent); border-radius: 10px;
+      background: var(--card);
+      display: flex; flex-wrap: wrap; gap: .5rem 1.5rem;
+      justify-content: space-between; align-items: baseline;
+    }
+    #grand[hidden] { display: none; }
+    #grand .label { font-weight: 600; }
+    #grand .sub { color: var(--muted); font-size: .875rem; display: block; font-weight: 400; }
+    #grand .value { font-family: var(--mono); font-size: 1.75rem; font-weight: 700; color: var(--accent); }
     footer { margin-top: 2.5rem; color: var(--muted); font-size: .875rem; }
   </style>
 </head>
@@ -130,6 +147,13 @@
 
   <div id="results"></div>
 
+  <div id="grand" hidden>
+    <span class="label">Total area, all files
+      <span class="sub" id="grandSub"></span>
+    </span>
+    <span class="value" id="grandValue"></span>
+  </div>
+
   <footer>Sizes come from each page's CropBox (or MediaBox) in PDF points, where 72 points = 1 inch. Rotated pages are shown as displayed.</footer>
 </main>
 
@@ -140,7 +164,7 @@
   const $ = id => document.getElementById(id);
   const results = $("results"), bar = $("bar"), status = $("status"), drop = $("drop");
   const rows = [];       // for CSV
-  let fileCount = 0, pageCount = 0, failCount = 0;
+  let fileCount = 0, pageCount = 0, failCount = 0, grandArea = 0;
 
   const PAPER = [
     ["A0", 841, 1189], ["A1", 594, 841], ["A2", 420, 594], ["A3", 297, 420],
@@ -197,15 +221,20 @@
   function renderFile(name, groups, total) {
     const table = el("table");
     const head = el("thead", {}, el("tr", {},
-      ...["Pages", "Shape", "Points", "Inches", "mm", "Size", "Rotation"]
+      ...["Pages", "Shape", "Points", "Inches", "mm", "Size", "Rotation", "m² per page", "m² total"]
         .map(t => el("th", { textContent: t, scope: "col" }))));
     const body = el("tbody");
+    let fileArea = 0;
 
     groups.forEach(g => {
       const label = g.start === g.end ? String(g.start) : `${g.start}–${g.end}`;
       const inW = g.width / 72, inH = g.height / 72;
       const mmW = inW * 25.4, mmH = inH * 25.4;
       const paper = paperName(g.width, g.height);
+      const count = g.end - g.start + 1;
+      const areaEach = (mmW / 1000) * (mmH / 1000);   // m² for one page
+      const areaGroup = areaEach * count;
+      fileArea += areaGroup;
 
       const scale = 22 / Math.max(g.width, g.height);
       const shape = el("span", { className: "shape" });
@@ -220,12 +249,15 @@
         td(`${inW.toFixed(2)} × ${inH.toFixed(2)}`, "num"),
         td(`${mmW.toFixed(0)} × ${mmH.toFixed(0)}`, "num"),
         el("td", {}, paper ? el("span", { className: "tag", textContent: paper }) : "—"),
-        td(g.rot + "°", "num")
+        td(g.rot + "°", "num"),
+        td(areaEach.toFixed(4), "num"),
+        td(areaGroup.toFixed(4), "num")
       );
       body.append(tr);
 
-      rows.push([name, label, g.width.toFixed(2), g.height.toFixed(2),
-        inW.toFixed(3), inH.toFixed(3), mmW.toFixed(1), mmH.toFixed(1), paper, g.rot]);
+      rows.push([name, label, count, g.width.toFixed(2), g.height.toFixed(2),
+        inW.toFixed(3), inH.toFixed(3), mmW.toFixed(1), mmH.toFixed(1), paper, g.rot,
+        areaEach.toFixed(6), areaGroup.toFixed(6)]);
     });
 
     table.append(head, body);
@@ -234,8 +266,12 @@
       el("header", {},
         el("h2", { textContent: name }),
         el("span", { className: "meta", textContent: `${total} page${total === 1 ? "" : "s"}, ${sizes}` })),
-      el("div", { className: "scroll" }, table));
+      el("div", { className: "scroll" }, table),
+      el("div", { className: "subtotal" },
+        el("span", { textContent: "File total" }),
+        el("strong", { textContent: fileArea.toFixed(4) + " m²" })));
     results.append(card);
+    return fileArea;
   }
 
   function renderError(name, message) {
@@ -249,6 +285,11 @@
     let text = `${fileCount} file${fileCount === 1 ? "" : "s"}, ${pageCount} page${pageCount === 1 ? "" : "s"}`;
     if (failCount) text += `, ${failCount} could not be read`;
     status.textContent = text;
+
+    const grand = $("grand");
+    grand.hidden = fileCount === 0;
+    $("grandValue").textContent = grandArea.toFixed(4) + " m²";
+    $("grandSub").textContent = `${pageCount} page${pageCount === 1 ? "" : "s"} across ${fileCount} file${fileCount === 1 ? "" : "s"}`;
   }
 
   async function handleFile(file) {
@@ -256,7 +297,7 @@
       const bytes = await file.arrayBuffer();
       const pdf = await PDFDocument.load(bytes, { ignoreEncryption: true });
       const infos = pdf.getPages().map(pageInfo);
-      renderFile(file.name, toGroups(infos), infos.length);
+      grandArea += renderFile(file.name, toGroups(infos), infos.length);
       fileCount++;
       pageCount += infos.length;
     } catch (err) {
@@ -284,8 +325,9 @@
   }
 
   $("csv").addEventListener("click", () => {
-    const header = ["file", "pages", "width_pt", "height_pt", "width_in", "height_in", "width_mm", "height_mm", "paper_size", "rotation"];
-    const csv = [header, ...rows].map(r => r.map(csvCell).join(",")).join("\n");
+    const header = ["file", "pages", "page_count", "width_pt", "height_pt", "width_in", "height_in", "width_mm", "height_mm", "paper_size", "rotation", "m2_per_page", "m2_total"];
+    const totalRow = ["TOTAL", "", pageCount, "", "", "", "", "", "", "", "", "", grandArea.toFixed(6)];
+    const csv = [header, ...rows, totalRow].map(r => r.map(csvCell).join(",")).join("\n");
     const url = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
     const a = el("a", { href: url, download: "pdf-dimensions.csv" });
     document.body.append(a); a.click(); a.remove();
@@ -295,9 +337,10 @@
   $("clear").addEventListener("click", () => {
     results.replaceChildren();
     rows.length = 0;
-    fileCount = pageCount = failCount = 0;
+    fileCount = pageCount = failCount = grandArea = 0;
     $("file").value = "";
     bar.hidden = true;
+    $("grand").hidden = true;
   });
 
   $("file").addEventListener("change", e => { handleFiles(e.target.files); e.target.value = ""; });
